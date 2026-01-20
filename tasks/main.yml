@@ -125,15 +125,118 @@
   ignore_errors: yes
   changed_when: vnc_process_check.stdout != ""
 
-- name: Start VNC server
-  shell: vncserver :{{ ar_kali_vnc_display }} -geometry {{ ar_kali_vnc_resolution }} -depth 24
-  become_user: "{{ ansible_user | default(ansible_env.USER) }}"
-  environment:
-    HOME: "{{ target_user_home.stdout }}"
-    DISPLAY: ":{{ ar_kali_vnc_display }}"
+- name: Copy VNC server manager script
+  copy:
+    src: files/vnc-server-manager.sh
+    dest: /usr/local/bin/vnc-server-manager.sh
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Start VNC server using manager script
+  shell: /usr/local/bin/vnc-server-manager.sh "{{ ansible_user | default(ansible_env.USER) }}" "{{ ar_kali_vnc_display }}" "{{ ar_kali_vnc_resolution }}"
   register: vnc_start_result
+  changed_when: "'already running' not in vnc_start_result.stdout | default('')"
   failed_when: 
     - vnc_start_result.rc != 0
-    - "'already in use' not in vnc_start_result.stderr | default('')"
-    - "'New Xtigervnc server' not in vnc_start_result.stdout | default('')"
-  changed_when: "'New Xtigervnc server' in vnc_start_result.stdout | default('')"
+    - "'already running' not in vnc_start_result.stdout | default('')"
+    - "'started successfully' not in vnc_start_result.stdout | default('')"
+  async: 30
+  poll: 5
+
+- name: Verify VNC server is running
+  shell: pgrep -f "Xtigervnc.*:{{ ar_kali_vnc_display }}" || (echo "VNC not running" && exit 1)
+  register: vnc_verify
+  changed_when: false
+  failed_when: vnc_verify.rc != 0
+
+- name: Create systemd service for VNC server
+  copy:
+    dest: /etc/systemd/system/vnc-server.service
+    content: |
+      [Unit]
+      Description=VNC Server Manager
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/vnc-server-manager.sh {{ ansible_user | default(ansible_env.USER) }} {{ ar_kali_vnc_display }} {{ ar_kali_vnc_resolution }}
+      RemainAfterExit=yes
+      User=root
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Create systemd timer for VNC server monitoring
+  copy:
+    dest: /etc/systemd/system/vnc-server-monitor.timer
+    content: |
+      [Unit]
+      Description=Run VNC Server Manager every 5 minutes
+      Requires=vnc-server.service
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=5min
+      Unit=vnc-server.service
+
+      [Install]
+      WantedBy=timers.target
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+  become: yes
+
+- name: Enable and start VNC server service
+  systemd:
+    name: vnc-server.service
+    enabled: yes
+    state: started
+  become: yes
+  register: vnc_service_start
+
+- name: Wait for VNC server to be ready
+  wait_for:
+    port: "{{ 5900 + ar_kali_vnc_display | int }}"
+    host: "{{ ansible_default_ipv4.address | default('127.0.0.1') }}"
+    delay: 5
+    timeout: 30
+  when: vnc_service_start.changed or vnc_service_start.state == 'started'
+  ignore_errors: yes
+
+- name: Final verification that VNC server is running
+  shell: |
+    if pgrep -f "Xtigervnc.*:{{ ar_kali_vnc_display }}" > /dev/null; then
+      echo "VNC server is running"
+      exit 0
+    else
+      echo "VNC server is NOT running - attempting manual start"
+      /usr/local/bin/vnc-server-manager.sh "{{ ansible_user | default(ansible_env.USER) }}" "{{ ar_kali_vnc_display }}" "{{ ar_kali_vnc_resolution }}"
+      sleep 3
+      if pgrep -f "Xtigervnc.*:{{ ar_kali_vnc_display }}" > /dev/null; then
+        echo "VNC server started successfully"
+        exit 0
+      else
+        echo "ERROR: VNC server failed to start"
+        exit 1
+      fi
+    fi
+  register: vnc_final_check
+  changed_when: "'started successfully' in vnc_final_check.stdout"
+  failed_when: "'ERROR' in vnc_final_check.stdout"
+
+- name: Enable and start VNC server monitor timer
+  systemd:
+    name: vnc-server-monitor.timer
+    enabled: yes
+    state: started
+  become: yes

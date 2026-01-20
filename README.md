@@ -37,7 +37,9 @@ This role performs the following tasks:
 3. **Creates VNC directory**: Sets up the `.vnc` directory in the user's home directory
 4. **Sets VNC password**: Configures the VNC password using the `ar_kali_password` variable
 5. **Creates xstartup script**: Configures the VNC startup script to launch a desktop environment (XFCE, GNOME, or LXDE)
-6. **Starts VNC server**: Launches the TigerVNC server on the specified display with the configured resolution
+6. **Deploys VNC server manager script**: Installs a script that ensures VNC server stays running
+7. **Starts VNC server**: Launches the TigerVNC server on the specified display with the configured resolution and allows external connections
+8. **Sets up systemd service**: Creates a systemd service and timer to automatically restart VNC if it stops
 
 ## Connecting via Apache Guacamole
 
@@ -60,9 +62,9 @@ Example Guacamole connection configuration:
 
 ## Manual VNC Server Management
 
-To manually start the VNC server:
+To manually start the VNC server (with external connections allowed):
 ```bash
-vncserver :1 -geometry 1920x1080 -depth 24
+vncserver :1 -geometry 1920x1080 -depth 24 -localhost no
 ```
 
 To stop the VNC server:
@@ -73,6 +75,38 @@ vncserver -kill :1
 To change the VNC password:
 ```bash
 vncpasswd
+```
+
+### Using the VNC Server Manager Script
+
+The role installs a VNC server manager script at `/usr/local/bin/vnc-server-manager.sh` that ensures the VNC server is running:
+
+```bash
+# Check and start VNC server if needed
+/usr/local/bin/vnc-server-manager.sh <username> <display> <resolution>
+
+# Example:
+/usr/local/bin/vnc-server-manager.sh kali 1 1920x1080
+```
+
+The script automatically:
+- Checks if VNC is already running
+- Kills stale processes if needed
+- Starts VNC with external connections enabled (`-localhost no`)
+
+### Systemd Service Management
+
+The role also sets up a systemd service and timer:
+
+```bash
+# Check VNC server status
+systemctl status vnc-server.service
+
+# Manually start VNC server
+systemctl start vnc-server.service
+
+# Check timer status (runs every 5 minutes to ensure VNC stays running)
+systemctl status vnc-server-monitor.timer
 ```
 
 ## License
