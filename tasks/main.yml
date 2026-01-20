@@ -13,24 +13,33 @@
     state: present
   become: yes
 
+- name: Get target user home directory
+  shell: |
+    getent passwd "{{ ansible_user | default(ansible_env.USER) }}" | cut -d: -f6
+  register: target_user_home
+  changed_when: false
+
 - name: Create .vnc directory
   file:
-    path: "{{ ansible_env.HOME }}/.vnc"
+    path: "{{ target_user_home.stdout }}/.vnc"
     state: directory
     mode: '0755'
-  become_user: "{{ ansible_user | default(ansible_env.USER) }}"
+    owner: "{{ ansible_user | default(ansible_env.USER) }}"
+    group: "{{ ansible_user | default(ansible_env.USER) }}"
 
 - name: Set VNC password
   shell: |
     printf '%s\n%s\nn\n' "{{ ar_kali_password }}" "{{ ar_kali_password }}" | vncpasswd
   args:
-    creates: "{{ ansible_env.HOME }}/.vnc/passwd"
+    creates: "{{ target_user_home.stdout }}/.vnc/passwd"
   become_user: "{{ ansible_user | default(ansible_env.USER) }}"
+  environment:
+    HOME: "{{ target_user_home.stdout }}"
   no_log: true
 
 - name: Create VNC xstartup script
   copy:
-    dest: "{{ ansible_env.HOME }}/.vnc/xstartup"
+    dest: "{{ target_user_home.stdout }}/.vnc/xstartup"
     content: |
       #!/bin/sh
       unset SESSION_MANAGER
@@ -50,17 +59,19 @@
         xterm &
       fi
     mode: '0755'
-  become_user: "{{ ansible_user | default(ansible_env.USER) }}"
+    owner: "{{ ansible_user | default(ansible_env.USER) }}"
+    group: "{{ ansible_user | default(ansible_env.USER) }}"
 
 - name: Check if VNC server is running
   stat:
-    path: "{{ ansible_env.HOME }}/.vnc/{{ ansible_hostname }}:{{ ar_kali_vnc_display }}.pid"
-  become_user: "{{ ansible_user | default(ansible_env.USER) }}"
+    path: "{{ target_user_home.stdout }}/.vnc/{{ ansible_hostname }}:{{ ar_kali_vnc_display }}.pid"
   register: vnc_pid_file
 
 - name: Kill existing VNC server on display {{ ar_kali_vnc_display }}
   shell: vncserver -kill :{{ ar_kali_vnc_display }}
   become_user: "{{ ansible_user | default(ansible_env.USER) }}"
+  environment:
+    HOME: "{{ target_user_home.stdout }}"
   when: vnc_pid_file.stat.exists
   ignore_errors: yes
   changed_when: vnc_pid_file.stat.exists
@@ -69,6 +80,6 @@
   shell: vncserver :{{ ar_kali_vnc_display }} -geometry {{ ar_kali_vnc_resolution }} -depth 24
   become_user: "{{ ansible_user | default(ansible_env.USER) }}"
   environment:
-    HOME: "{{ ansible_env.HOME }}"
+    HOME: "{{ target_user_home.stdout }}"
   register: vnc_start_result
   changed_when: "'already in use' not in vnc_start_result.stderr | default('')"
