@@ -13,6 +13,16 @@
     state: present
   become: yes
 
+- name: Install desktop environment and X11 utilities
+  apt:
+    name:
+      - xfce4
+      - xfce4-goodies
+      - xterm
+      - dbus-x11
+    state: present
+  become: yes
+
 - name: Get target user home directory
   shell: |
     getent passwd "{{ ansible_user | default(ansible_env.USER) }}" | cut -d: -f6
@@ -27,8 +37,17 @@
     owner: "{{ ansible_user | default(ansible_env.USER) }}"
     group: "{{ ansible_user | default(ansible_env.USER) }}"
 
+- name: Create .config/tigervnc directory
+  file:
+    path: "{{ target_user_home.stdout }}/.config/tigervnc"
+    state: directory
+    mode: '0755'
+    owner: "{{ ansible_user | default(ansible_env.USER) }}"
+    group: "{{ ansible_user | default(ansible_env.USER) }}"
+
 - name: Set VNC password
   shell: |
+    mkdir -p "{{ target_user_home.stdout }}/.config/tigervnc"
     printf '%s\n%s\nn\n' "{{ ar_kali_password }}" "{{ ar_kali_password }}" | vncpasswd
   args:
     creates: "{{ target_user_home.stdout }}/.vnc/passwd"
@@ -37,26 +56,45 @@
     HOME: "{{ target_user_home.stdout }}"
   no_log: true
 
+- name: Copy VNC password to TigerVNC location
+  copy:
+    src: "{{ target_user_home.stdout }}/.vnc/passwd"
+    dest: "{{ target_user_home.stdout }}/.config/tigervnc/passwd"
+    remote_src: yes
+    mode: '0600'
+    owner: "{{ ansible_user | default(ansible_env.USER) }}"
+    group: "{{ ansible_user | default(ansible_env.USER) }}"
+  when: ansible_check_mode == false
+
+- name: Create .Xauthority file
+  file:
+    path: "{{ target_user_home.stdout }}/.Xauthority"
+    state: touch
+    mode: '0600'
+    owner: "{{ ansible_user | default(ansible_env.USER) }}"
+    group: "{{ ansible_user | default(ansible_env.USER) }}"
+
 - name: Create VNC xstartup script
   copy:
-    dest: "{{ target_user_home.stdout }}/.vnc/xstartup"
+    dest: "{{ target_user_home.stdout }}/.config/tigervnc/xstartup"
     content: |
-      #!/bin/sh
+      #!/bin/bash
       unset SESSION_MANAGER
       unset DBUS_SESSION_BUS_ADDRESS
-      [ -x /etc/vnc/xstartup ] && exec /etc/vnc/xstartup
       [ -r $HOME/.Xresources ] && xrdb $HOME/.Xresources
-      x-window-manager &
-      # Try to start a desktop environment
+      # Start XFCE4 desktop environment
       if command -v startxfce4 > /dev/null; then
         startxfce4 &
-      elif command -v gnome-session > /dev/null; then
-        gnome-session &
-      elif command -v startlxde > /dev/null; then
-        startlxde &
       else
-        # Fallback to a basic window manager
-        xterm &
+        # Fallback to a basic session
+        if command -v xfce4-session > /dev/null; then
+          xfce4-session &
+        elif command -v gnome-session > /dev/null; then
+          gnome-session &
+        else
+          # Last resort: start a terminal
+          xterm &
+        fi
       fi
     mode: '0755'
     owner: "{{ ansible_user | default(ansible_env.USER) }}"
@@ -64,22 +102,33 @@
 
 - name: Check if VNC server is running
   stat:
-    path: "{{ target_user_home.stdout }}/.vnc/{{ ansible_hostname }}:{{ ar_kali_vnc_display }}.pid"
+    path: "{{ target_user_home.stdout }}/.config/tigervnc/{{ ansible_hostname }}:{{ ar_kali_vnc_display }}.pid"
   register: vnc_pid_file
+  ignore_errors: yes
+
+- name: Check if VNC server process is running
+  shell: pgrep -f "Xtigervnc.*:{{ ar_kali_vnc_display }}" || true
+  register: vnc_process_check
+  changed_when: false
 
 - name: Kill existing VNC server on display {{ ar_kali_vnc_display }}
   shell: vncserver -kill :{{ ar_kali_vnc_display }}
   become_user: "{{ ansible_user | default(ansible_env.USER) }}"
   environment:
     HOME: "{{ target_user_home.stdout }}"
-  when: vnc_pid_file.stat.exists
+  when: vnc_process_check.stdout != ""
   ignore_errors: yes
-  changed_when: vnc_pid_file.stat.exists
+  changed_when: vnc_process_check.stdout != ""
 
 - name: Start VNC server
   shell: vncserver :{{ ar_kali_vnc_display }} -geometry {{ ar_kali_vnc_resolution }} -depth 24
   become_user: "{{ ansible_user | default(ansible_env.USER) }}"
   environment:
     HOME: "{{ target_user_home.stdout }}"
+    DISPLAY: ":{{ ar_kali_vnc_display }}"
   register: vnc_start_result
-  changed_when: "'already in use' not in vnc_start_result.stderr | default('')"
+  failed_when: 
+    - vnc_start_result.rc != 0
+    - "'already in use' not in vnc_start_result.stderr | default('')"
+    - "'New Xtigervnc server' not in vnc_start_result.stdout | default('')"
+  changed_when: "'New Xtigervnc server' in vnc_start_result.stdout | default('')"
