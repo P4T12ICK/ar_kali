@@ -75,22 +75,43 @@ start_vnc() {
         fi
     fi
     
-    # Wait a moment and verify it started
-    sleep 3
-    if check_vnc_running; then
-        echo "VNC server started successfully on display :$VNC_DISPLAY"
-        # Verify it's listening on the port
-        VNC_PORT=$((5900 + VNC_DISPLAY))
-        if netstat -tln 2>/dev/null | grep -q ":$VNC_PORT " || ss -tln 2>/dev/null | grep -q ":$VNC_PORT "; then
-            echo "VNC server is listening on port $VNC_PORT"
+    # Wait longer for VNC server and xstartup to fully initialize
+    # The xstartup script needs time to start the desktop environment
+    sleep 5
+    
+    # Check multiple times with delays to account for slow startup
+    MAX_RETRIES=3
+    RETRY_COUNT=0
+    while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+        if check_vnc_running; then
+            echo "VNC server started successfully on display :$VNC_DISPLAY"
+            # Verify it's listening on the port
+            VNC_PORT=$((5900 + VNC_DISPLAY))
+            if netstat -tln 2>/dev/null | grep -q ":$VNC_PORT " || ss -tln 2>/dev/null | grep -q ":$VNC_PORT "; then
+                echo "VNC server is listening on port $VNC_PORT"
+            fi
+            return 0
         fi
-        return 0
-    else
-        echo "Error: VNC server process not found after startup attempt" >&2
-        echo "Last vncserver output:" >&2
-        echo "$VNC_OUTPUT" >&2
-        return 1
+        RETRY_COUNT=$((RETRY_COUNT + 1))
+        if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+            echo "VNC process not found yet, waiting... (attempt $RETRY_COUNT/$MAX_RETRIES)"
+            sleep 3
+        fi
+    done
+    
+    # If we get here, VNC didn't start properly
+    echo "Error: VNC server process not found after startup attempt" >&2
+    echo "Last vncserver output:" >&2
+    echo "$VNC_OUTPUT" >&2
+    
+    # Check the log file for more details
+    LOG_FILE="$VNC_HOME/.config/tigervnc/$(hostname):$VNC_DISPLAY.log"
+    if [ -f "$LOG_FILE" ]; then
+        echo "VNC log file contents:" >&2
+        tail -20 "$LOG_FILE" >&2 || true
     fi
+    
+    return 1
 }
 
 # Main logic

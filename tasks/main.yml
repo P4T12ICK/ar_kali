@@ -18,8 +18,10 @@
     name:
       - xfce4
       - xfce4-goodies
+      - xfce4-session
       - xterm
       - dbus-x11
+      - twm
     state: present
   become: yes
 
@@ -84,22 +86,35 @@
     dest: "{{ target_user_home.stdout }}/.config/tigervnc/xstartup"
     content: |
       #!/bin/bash
+      # Unset problematic environment variables
       unset SESSION_MANAGER
       unset DBUS_SESSION_BUS_ADDRESS
+      
+      # Load X resources
       [ -r $HOME/.Xresources ] && xrdb $HOME/.Xresources
-      # Start XFCE4 desktop environment
-      if command -v startxfce4 > /dev/null; then
-        startxfce4 &
+      
+      # Start DBUS session
+      if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+        eval $(dbus-launch --sh-syntax --exit-with-session)
+      fi
+      
+      # Start a window manager in the background
+      if command -v xfwm4 > /dev/null; then
+        xfwm4 --replace --sm-client-disable &
+      elif command -v twm > /dev/null; then
+        twm &
+      fi
+      
+      # Start XFCE4 session (exec replaces this shell process)
+      if command -v xfce4-session > /dev/null; then
+        exec xfce4-session
+      elif command -v startxfce4 > /dev/null; then
+        exec startxfce4
+      elif command -v gnome-session > /dev/null; then
+        exec gnome-session
       else
-        # Fallback to a basic session
-        if command -v xfce4-session > /dev/null; then
-          xfce4-session &
-        elif command -v gnome-session > /dev/null; then
-          gnome-session &
-        else
-          # Last resort: start a terminal
-          xterm &
-        fi
+        # Last resort: keep a terminal running
+        exec xterm
       fi
     mode: '0755'
     owner: "{{ ansible_user | default(ansible_env.USER) }}"
