@@ -47,14 +47,19 @@
 
 - name: Set VNC password
   shell: |
-    mkdir -p "{{ target_user_home.stdout }}/.config/tigervnc"
     printf '%s\n%s\nn\n' "{{ ar_kali_password }}" "{{ ar_kali_password }}" | vncpasswd
-  args:
-    creates: "{{ target_user_home.stdout }}/.vnc/passwd"
   become_user: "{{ ansible_user | default(ansible_env.USER) }}"
   environment:
     HOME: "{{ target_user_home.stdout }}"
+  args:
+    creates: "{{ target_user_home.stdout }}/.vnc/passwd"
   no_log: true
+  register: vnc_passwd_result
+
+- name: Ensure VNC password file exists
+  stat:
+    path: "{{ target_user_home.stdout }}/.vnc/passwd"
+  register: vnc_passwd_file
 
 - name: Copy VNC password to TigerVNC location
   copy:
@@ -64,7 +69,7 @@
     mode: '0600'
     owner: "{{ ansible_user | default(ansible_env.USER) }}"
     group: "{{ ansible_user | default(ansible_env.USER) }}"
-  when: ansible_check_mode == false
+  when: vnc_passwd_file.stat.exists
 
 - name: Create .Xauthority file
   file:
